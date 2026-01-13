@@ -1594,7 +1594,7 @@
     //     }
     "shell": "system",
     // Where to dock terminals panel. Can be `left`, `right`, `bottom`.
-    "dock": "bottom",
+    "dock": "right",
     // Default width when the terminal is docked to the left or right.
     "default_width": 640,
     // Default height when the terminal is docked to the bottom.
