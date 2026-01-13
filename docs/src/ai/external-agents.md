@@ -17,7 +17,7 @@ This means that you're running the real Gemini CLI, with all of the advantages o
 
 ### Getting Started
 
-As of [Zed Stable v0.201.5](https://zed.dev/releases/stable/0.201.5) you should be able to use Gemini CLI directly from Zed. First open the agent panel with {#kb agent::ToggleFocus}, and then use the `+` button in the top right to start a new Gemini CLI thread.
+As of [Zed Stable v0.201.5](https://zed.dev/releases/stable/0.201.5) you should be able to use Gemini CLI directly from Zed. The agent panel is the main view, and you can use the `+` button in the top right to start a new Gemini CLI thread.
 
 If you'd like to bind this to a keyboard shortcut, you can do so by editing your `keymap.json` file via the `zed: open keymap` command to include:
 
@@ -74,7 +74,7 @@ Under the hood, Zed runs Claude Code and communicate to it over ACP, through [a 
 
 ### Getting Started
 
-Open the agent panel with {#kb agent::ToggleFocus}, and then use the `+` button in the top right to start a new Claude Code thread.
+The agent panel is the main view; use the `+` button in the top right to start a new Claude Code thread.
 
 If you'd like to bind this to a keyboard shortcut, you can do so by editing your `keymap.json` file via the `zed: open keymap` command to include:
 
@@ -142,7 +142,7 @@ Under the hood, Zed runs Codex CLI and communicates to it over ACP, through [a d
 
 ### Getting Started
 
-As of Zed Stable v0.208 you should be able to use Codex directly from Zed. Open the agent panel with {#kb agent::ToggleFocus}, and then use the `+` button in the top right to start a new Codex thread.
+As of Zed Stable v0.208 you should be able to use Codex directly from Zed. The agent panel is the main view, and you can use the `+` button in the top right to start a new Codex thread.
 
 If you'd like to bind this to a keyboard shortcut, you can do so by editing your `keymap.json` file via the `zed: open keymap` command to include:
 

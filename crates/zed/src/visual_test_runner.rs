@@ -1622,7 +1622,12 @@ fn run_agent_thread_view_test(
         workspace_window
             .update(cx, |workspace, window, cx| {
                 workspace.add_panel(panel.clone(), window, cx);
-                workspace.open_panel::<AgentPanel>(window, cx);
+                if !panel.read(cx).shows_in_dock(cx) {
+                    let focus_handle = panel.read(cx).focus_handle(cx);
+                    workspace.set_main_view(panel.clone().into(), focus_handle, window, cx);
+                } else {
+                    workspace.open_panel::<AgentPanel>(window, cx);
+                }
             })
             .ok();
     })?;

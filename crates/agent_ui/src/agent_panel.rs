@@ -1627,6 +1627,10 @@ impl Panel for AgentPanel {
         position != DockPosition::Bottom
     }
 
+    fn shows_in_dock(&self, _cx: &App) -> bool {
+        false
+    }
+
     fn set_position(&mut self, position: DockPosition, _: &mut Window, cx: &mut Context<Self>) {
         settings::update_settings_file(self.fs.clone(), cx, move |settings, _| {
             settings

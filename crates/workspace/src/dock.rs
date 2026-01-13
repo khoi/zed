@@ -98,6 +98,9 @@ pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
     fn panel_key() -> &'static str;
     fn position(&self, window: &Window, cx: &App) -> DockPosition;
     fn position_is_valid(&self, position: DockPosition) -> bool;
+    fn shows_in_dock(&self, _cx: &App) -> bool {
+        true
+    }
     fn set_position(&mut self, position: DockPosition, window: &mut Window, cx: &mut Context<Self>);
     fn size(&self, window: &Window, cx: &App) -> Pixels;
     fn set_size(&mut self, size: Option<Pixels>, window: &mut Window, cx: &mut Context<Self>);
@@ -133,6 +136,7 @@ pub trait PanelHandle: Send + Sync {
     fn panel_key(&self) -> &'static str;
     fn position(&self, window: &Window, cx: &App) -> DockPosition;
     fn position_is_valid(&self, position: DockPosition, cx: &App) -> bool;
+    fn shows_in_dock(&self, cx: &App) -> bool;
     fn set_position(&self, position: DockPosition, window: &mut Window, cx: &mut App);
     fn is_zoomed(&self, window: &Window, cx: &App) -> bool;
     fn set_zoomed(&self, zoomed: bool, window: &mut Window, cx: &mut App);
@@ -188,6 +192,10 @@ where
 
     fn position_is_valid(&self, position: DockPosition, cx: &App) -> bool {
         self.read(cx).position_is_valid(position)
+    }
+
+    fn shows_in_dock(&self, cx: &App) -> bool {
+        self.read(cx).shows_in_dock(cx)
     }
 
     fn set_position(&self, position: DockPosition, window: &mut Window, cx: &mut App) {
@@ -462,7 +470,7 @@ impl Dock {
     pub fn first_enabled_panel_idx(&mut self, cx: &mut Context<Self>) -> anyhow::Result<usize> {
         self.panel_entries
             .iter()
-            .position(|entry| entry.panel.enabled(cx))
+            .position(|entry| entry.panel.shows_in_dock(cx) && entry.panel.enabled(cx))
             .with_context(|| {
                 format!(
                     "Couldn't find any enabled panel for the {} dock.",
@@ -682,10 +690,26 @@ impl Dock {
 
     pub fn restore_state(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if let Some(serialized) = self.serialized_dock.clone() {
+            let mut activated = false;
             if let Some(active_panel) = serialized.active_panel.filter(|_| serialized.visible)
                 && let Some(idx) = self.panel_index_for_persistent_name(active_panel.as_str(), cx)
+                && self
+                    .panel_entries
+                    .get(idx)
+                    .is_some_and(|entry| entry.panel.shows_in_dock(cx))
             {
                 self.activate_panel(idx, window, cx);
+                activated = true;
+            }
+
+            if !activated && serialized.visible {
+                if let Some(idx) = self
+                    .panel_entries
+                    .iter()
+                    .position(|entry| entry.panel.shows_in_dock(cx) && entry.panel.enabled(cx))
+                {
+                    self.activate_panel(idx, window, cx);
+                }
             }
 
             if serialized.zoom
@@ -693,7 +717,8 @@ impl Dock {
             {
                 panel.set_zoomed(true, window, cx)
             }
-            self.set_open(serialized.visible, window, cx);
+            let should_open = serialized.visible && self.active_panel().is_some();
+            self.set_open(should_open, window, cx);
             return true;
         }
         false
@@ -737,6 +762,13 @@ impl Dock {
     }
 
     pub fn activate_panel(&mut self, panel_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if !self
+            .panel_entries
+            .get(panel_ix)
+            .is_some_and(|entry| entry.panel.shows_in_dock(cx))
+        {
+            return;
+        }
         if Some(panel_ix) != self.active_panel_index {
             if let Some(active_panel) = self.active_panel_entry() {
                 active_panel.panel.set_active(false, window, cx);
@@ -980,6 +1012,9 @@ impl Render for PanelButtons {
             .iter()
             .enumerate()
             .filter_map(|(i, entry)| {
+                if !entry.panel.shows_in_dock(cx) {
+                    return None;
+                }
                 let icon = entry.panel.icon(window, cx)?;
                 let icon_tooltip = entry
                     .panel

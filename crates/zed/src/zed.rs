@@ -702,6 +702,18 @@ fn setup_or_teardown_ai_panel<P: Panel>(
         .disable_ai
         || cfg!(test);
     let existing_panel = workspace.panel::<P>(cx);
+    if disable_ai {
+        workspace.clear_main_view(cx);
+    } else if let Some(panel) = existing_panel.as_ref() {
+        if panel.read(cx).shows_in_dock(cx) {
+            if workspace.has_main_view() {
+                workspace.clear_main_view(cx);
+            }
+        } else {
+            let focus_handle = panel.read(cx).focus_handle(cx);
+            workspace.set_main_view(panel.clone().into(), focus_handle, window, cx);
+        }
+    }
     match (disable_ai, existing_panel) {
         (false, None) => cx.spawn_in(window, async move |workspace, cx| {
             let panel = load_panel(workspace.clone(), cx.clone()).await?;
@@ -711,12 +723,18 @@ fn setup_or_teardown_ai_panel<P: Panel>(
                     .disable_ai;
                 let have_panel = workspace.panel::<P>(cx).is_some();
                 if !disable_ai && !have_panel {
-                    workspace.add_panel(panel, window, cx);
+                    let panel = panel.clone();
+                    workspace.add_panel(panel.clone(), window, cx);
+                    if !panel.read(cx).shows_in_dock(cx) {
+                        let focus_handle = panel.read(cx).focus_handle(cx);
+                        workspace.set_main_view(panel.clone().into(), focus_handle, window, cx);
+                    }
                 }
             })
         }),
         (true, Some(existing_panel)) => {
             workspace.remove_panel::<P>(&existing_panel, window, cx);
+            workspace.clear_main_view(cx);
             Task::ready(Ok(()))
         }
         _ => Task::ready(Ok(())),

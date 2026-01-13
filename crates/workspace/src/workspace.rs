@@ -43,8 +43,8 @@ use futures::{
     future::{Shared, try_join_all},
 };
 use gpui::{
-    Action, AnyEntity, AnyView, AnyWeakView, App, AsyncApp, AsyncWindowContext, Bounds, Context,
-    CursorStyle, Decorations, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle,
+    Action, AnyElement, AnyEntity, AnyView, AnyWeakView, App, AsyncApp, AsyncWindowContext, Bounds,
+    Context, CursorStyle, Decorations, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle,
     Focusable, Global, HitboxBehavior, Hsla, KeyContext, Keystroke, ManagedView, MouseButton,
     PathPromptOptions, Point, PromptLevel, Render, ResizeEdge, Size, Stateful, Subscription,
     SystemWindowTabController, Task, Tiling, WeakEntity, WindowBounds, WindowHandle, WindowId,
@@ -1158,6 +1158,8 @@ pub struct Workspace {
     previous_dock_drag_coordinates: Option<Point<Pixels>>,
     zoomed_position: Option<DockPosition>,
     center: PaneGroup,
+    main_view: Option<AnyView>,
+    main_view_focus_handle: Option<FocusHandle>,
     left_dock: Entity<Dock>,
     bottom_dock: Entity<Dock>,
     right_dock: Entity<Dock>,
@@ -1560,6 +1562,8 @@ impl Workspace {
             zoomed_position: None,
             previous_dock_drag_coordinates: None,
             center,
+            main_view: None,
+            main_view_focus_handle: None,
             panes: vec![center_pane.clone()],
             panes_by_item: Default::default(),
             active_pane: center_pane.clone(),
@@ -3286,12 +3290,66 @@ impl Workspace {
         self.serialize_workspace(window, cx);
     }
 
+    pub fn set_main_view(
+        &mut self,
+        view: AnyView,
+        focus_handle: FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.main_view = Some(view);
+        self.main_view_focus_handle = Some(focus_handle.clone());
+        window.focus(&focus_handle, cx);
+        cx.notify();
+    }
+
+    pub fn clear_main_view(&mut self, cx: &mut Context<Self>) {
+        self.main_view = None;
+        self.main_view_focus_handle = None;
+        cx.notify();
+    }
+
+    pub fn has_main_view(&self) -> bool {
+        self.main_view.is_some()
+    }
+
+    fn render_center_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(view) = self.main_view.clone() {
+            view.into_any_element()
+        } else {
+            self.center
+                .render(
+                    self.zoomed.as_ref(),
+                    &PaneRenderContext {
+                        follower_states: &self.follower_states,
+                        active_call: self.active_call(),
+                        active_pane: &self.active_pane,
+                        app_state: &self.app_state,
+                        project: &self.project,
+                        workspace: &self.weak_self,
+                    },
+                    window,
+                    cx,
+                )
+                .into_any_element()
+        }
+    }
+
     /// Transfer focus to the panel of the given type.
     pub fn focus_panel<T: Panel>(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<T>> {
+        if let Some(panel) = self.panel::<T>(cx)
+            && !panel.read(cx).shows_in_dock(cx)
+        {
+            let focus_handle = panel.read(cx).focus_handle(cx);
+            window.focus(&focus_handle, cx);
+            self.serialize_workspace(window, cx);
+            cx.notify();
+            return Some(panel);
+        }
         let panel = self.focus_or_unfocus_panel::<T>(window, cx, |_, _, _| true)?;
         panel.to_any().downcast().ok()
     }
@@ -3303,6 +3361,21 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if let Some(panel) = self.panel::<T>(cx)
+            && !panel.read(cx).shows_in_dock(cx)
+        {
+            let focus_handle = panel.read(cx).focus_handle(cx);
+            let did_focus_panel = !focus_handle.contains_focused(window, cx);
+            if did_focus_panel {
+                window.focus(&focus_handle, cx);
+            } else {
+                self.active_pane
+                    .update(cx, |pane, cx| window.focus(&pane.focus_handle(cx), cx))
+            }
+            self.serialize_workspace(window, cx);
+            cx.notify();
+            return did_focus_panel;
+        }
         let mut did_focus_panel = false;
         self.focus_or_unfocus_panel::<T>(window, cx, |panel, window, cx| {
             did_focus_panel = !panel.panel_focus_handle(cx).contains_focused(window, cx);
@@ -3385,6 +3458,16 @@ impl Workspace {
 
     /// Open the panel of the given type
     pub fn open_panel<T: Panel>(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.panel::<T>(cx)
+            && !panel.read(cx).shows_in_dock(cx)
+        {
+            let focus_handle = panel.read(cx).focus_handle(cx);
+            window.focus(&focus_handle, cx);
+            self.serialize_workspace(window, cx);
+            cx.notify();
+            return;
+        }
+
         for dock in self.all_docks() {
             if let Some(panel_index) = dock.read(cx).panel_index_for_type::<T>() {
                 dock.update(cx, |dock, cx| {
@@ -6852,6 +6935,9 @@ fn adjust_open_docks_size_by_px(
 
 impl Focusable for Workspace {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
+        if let Some(handle) = self.main_view_focus_handle.as_ref() {
+            return handle.clone();
+        }
         self.active_pane.focus_handle(cx)
     }
 }
@@ -6906,7 +6992,8 @@ impl Render for Workspace {
             }
         }
 
-        let centered_layout = self.centered_layout
+        let centered_layout = self.main_view.is_none()
+            && self.centered_layout
             && self.center.panes().len() == 1
             && self.active_item(cx).is_some();
         let render_padding = |size| {
@@ -7135,20 +7222,11 @@ impl Render for Workspace {
                                                                             )
                                                                         },
                                                                     )
-                                                                    .child(self.center.render(
-                                                                        self.zoomed.as_ref(),
-                                                                        &PaneRenderContext {
-                                                                            follower_states:
-                                                                                &self.follower_states,
-                                                                            active_call: self.active_call(),
-                                                                            active_pane: &self.active_pane,
-                                                                            app_state: &self.app_state,
-                                                                            project: &self.project,
-                                                                            workspace: &self.weak_self,
-                                                                        },
-                                                                        window,
-                                                                        cx,
-                                                                    ))
+                                                                    .child(
+                                                                        self.render_center_view(
+                                                                            window, cx,
+                                                                        ),
+                                                                    )
                                                                     .when_some(
                                                                         paddings.1,
                                                                         |this, p| {
@@ -7217,20 +7295,11 @@ impl Render for Workspace {
                                                                         h_flex()
                                                                             .flex_1()
                                                                             .when_some(paddings.0, |this, p| this.child(p.border_r_1()))
-                                                                            .child(self.center.render(
-                                                                                self.zoomed.as_ref(),
-                                                                                &PaneRenderContext {
-                                                                                    follower_states:
-                                                                                        &self.follower_states,
-                                                                                    active_call: self.active_call(),
-                                                                                    active_pane: &self.active_pane,
-                                                                                    app_state: &self.app_state,
-                                                                                    project: &self.project,
-                                                                                    workspace: &self.weak_self,
-                                                                                },
-                                                                                window,
-                                                                                cx,
-                                                                            ))
+                                                                            .child(
+                                                                                self.render_center_view(
+                                                                                    window, cx,
+                                                                                ),
+                                                                            )
                                                                             .when_some(paddings.1, |this, p| this.child(p.border_l_1())),
                                                                     )
                                                             )
@@ -7295,20 +7364,11 @@ impl Render for Workspace {
                                                                         h_flex()
                                                                             .flex_1()
                                                                             .when_some(paddings.0, |this, p| this.child(p.border_r_1()))
-                                                                            .child(self.center.render(
-                                                                                self.zoomed.as_ref(),
-                                                                                &PaneRenderContext {
-                                                                                    follower_states:
-                                                                                        &self.follower_states,
-                                                                                    active_call: self.active_call(),
-                                                                                    active_pane: &self.active_pane,
-                                                                                    app_state: &self.app_state,
-                                                                                    project: &self.project,
-                                                                                    workspace: &self.weak_self,
-                                                                                },
-                                                                                window,
-                                                                                cx,
-                                                                            ))
+                                                                            .child(
+                                                                                self.render_center_view(
+                                                                                    window, cx,
+                                                                                ),
+                                                                            )
                                                                             .when_some(paddings.1, |this, p| this.child(p.border_l_1())),
                                                                     )
                                                             )
@@ -7359,19 +7419,8 @@ impl Render for Workspace {
                                                             .when_some(paddings.0, |this, p| {
                                                                 this.child(p.border_r_1())
                                                             })
-                                                            .child(self.center.render(
-                                                                self.zoomed.as_ref(),
-                                                                &PaneRenderContext {
-                                                                    follower_states:
-                                                                        &self.follower_states,
-                                                                    active_call: self.active_call(),
-                                                                    active_pane: &self.active_pane,
-                                                                    app_state: &self.app_state,
-                                                                    project: &self.project,
-                                                                    workspace: &self.weak_self,
-                                                                },
-                                                                window,
-                                                                cx,
+                                                            .child(self.render_center_view(
+                                                                window, cx,
                                                             ))
                                                             .when_some(paddings.1, |this, p| {
                                                                 this.child(p.border_l_1())
